@@ -1,20 +1,43 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { View, StatusBar } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-export default function App() {
+import CameraScreen from './src/screens/CameraScreen';
+import FeedScreen from './src/screens/FeedScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
+import FriendsScreen from './src/screens/FriendsScreen';
+import DiscoveryScreen from './src/screens/DiscoveryScreen';
+import BottomTabBar from './src/components/BottomTabBar';
+
+const App: React.FC = () => {
+  const [activeTab, setActiveTab] = useState('Camera');
+
+  const renderScreen = () => {
+    switch (activeTab) {
+      case 'Camera':
+        return <CameraScreen />;
+      case 'Feed':
+        return <FeedScreen />;
+      case 'Friends':
+        return <FriendsScreen />;
+      case 'Discovery':
+        return <DiscoveryScreen />;
+      case 'Profile':
+        return <ProfileScreen />;
+      default:
+        return <CameraScreen />;
+    }
+  };
+
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <SafeAreaProvider>
+      <View style={{ flex: 1, backgroundColor: '#000' }}>
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        {renderScreen()}
+        <BottomTabBar activeTab={activeTab} onTabPress={setActiveTab} />
+      </View>
+    </SafeAreaProvider>
   );
-}
+};
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
+export default App;

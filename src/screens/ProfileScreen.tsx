@@ -7,14 +7,17 @@ import {
   ScrollView,
   Image,
   Alert,
+  Modal,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../contexts/AuthContext';
 import * as PostService from '../services/PostService';
 import * as UserStorage from '../services/UserStorage';
+import EditProfileScreen from './EditProfileScreen';
 
 const ProfileScreen: React.FC = () => {
   const { user, logout } = useAuth();
+  const [showEditProfile, setShowEditProfile] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -55,11 +58,15 @@ const ProfileScreen: React.FC = () => {
   };
 
   const editProfile = () => {
-    Alert.alert(
-      'Edit Profile',
-      'Profile editing feature coming soon!',
-      [{ text: 'OK' }]
-    );
+    setShowEditProfile(true);
+  };
+
+  const closeEditProfile = () => {
+    setShowEditProfile(false);
+    // Reload stats in case user info was updated
+    if (user) {
+      loadStats();
+    }
   };
 
   const renderStats = () => (
@@ -150,6 +157,15 @@ const ProfileScreen: React.FC = () => {
           <Text style={styles.settingArrow}>›</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Edit Profile Modal */}
+      <Modal
+        visible={showEditProfile}
+        animationType="slide"
+        presentationStyle="fullScreen"
+      >
+        <EditProfileScreen onClose={closeEditProfile} />
+      </Modal>
     </ScrollView>
   );
 };

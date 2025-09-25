@@ -11,26 +11,22 @@ import {
   RefreshControl,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '../contexts/AuthContext';
+import * as PostService from '../services/PostService';
+import { Post } from '../types/Post';
 // import ImageView from 'react-native-image-viewing';
 
 const { width, height } = Dimensions.get('window');
 
-interface Post {
-  id: string;
-  frontImage: string;
-  backImage: string;
-  timestamp: number;
-  hasPosted: boolean;
-  username?: string;
-  userAvatar?: string;
-}
-
 interface FeedItemProps {
   post: Post;
   onImagePress: (image: string) => void;
+  currentUserId: string;
+  onLike: (postId: string) => void;
+  onUnlike: (postId: string) => void;
 }
 
-const FeedItem: React.FC<FeedItemProps> = ({ post, onImagePress }) => {
+const FeedItem: React.FC<FeedItemProps> = ({ post, onImagePress, currentUserId, onLike, onUnlike }) => {
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);
     const now = new Date();
@@ -51,17 +47,28 @@ const FeedItem: React.FC<FeedItemProps> = ({ post, onImagePress }) => {
       <View style={styles.postHeader}>
         <View style={styles.userInfo}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {post.username ? post.username[0].toUpperCase() : 'U'}
-            </Text>
+            {post.userAvatar ? (
+              <Image source={{ uri: post.userAvatar }} style={styles.avatarImage} />
+            ) : (
+              <Text style={styles.avatarText}>
+                {post.displayName ? post.displayName[0].toUpperCase() : 'U'}
+              </Text>
+            )}
           </View>
           <View>
             <Text style={styles.username}>
-              {post.username || 'You'}
+              {post.displayName || post.username}
             </Text>
-            <Text style={styles.timestamp}>
-              {formatTime(post.timestamp)}
-            </Text>
+            <View style={styles.timestampContainer}>
+              <Text style={styles.timestamp}>
+                {formatTime(post.timestamp)}
+              </Text>
+              {post.isLate && (
+                <Text style={styles.lateIndicator}>
+                  • {post.lateMinutes}m late
+                </Text>
+              )}
+            </View>
           </View>
         </View>
         <TouchableOpacity style={styles.moreButton}>
@@ -92,11 +99,29 @@ const FeedItem: React.FC<FeedItemProps> = ({ post, onImagePress }) => {
       </View>
       
       <View style={styles.postActions}>
-        <TouchableOpacity style={styles.actionButton}>
-          <Text style={styles.actionText}>❤️</Text>
+        <TouchableOpacity 
+          style={styles.actionButton}
+          onPress={() => {
+            const userLiked = post.likes.some(like => like.userId === currentUserId);
+            if (userLiked) {
+              onUnlike(post.id);
+            } else {
+              onLike(post.id);
+            }
+          }}
+        >
+          <Text style={styles.actionText}>
+            {post.likes.some(like => like.userId === currentUserId) ? '❤️' : '🤍'}
+          </Text>
+          {post.likes.length > 0 && (
+            <Text style={styles.actionCount}>{post.likes.length}</Text>
+          )}
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionButton}>
           <Text style={styles.actionText}>💬</Text>
+          {post.comments.length > 0 && (
+            <Text style={styles.actionCount}>{post.comments.length}</Text>
+          )}
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionButton}>
           <Text style={styles.actionText}>📤</Text>
@@ -107,24 +132,24 @@ const FeedItem: React.FC<FeedItemProps> = ({ post, onImagePress }) => {
 };
 
 const FeedScreen: React.FC = () => {
+  const { user } = useAuth();
   const [posts, setPosts] = useState<Post[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [imageViewVisible, setImageViewVisible] = useState(false);
 
   useEffect(() => {
-    loadPosts();
-  }, []);
+    if (user) {
+      loadPosts();
+    }
+  }, [user]);
 
   const loadPosts = async () => {
+    if (!user) return;
+    
     try {
-      const storedPosts = await AsyncStorage.getItem('posts');
-      if (storedPosts) {
-        const parsedPosts = JSON.parse(storedPosts);
-        // Sort by timestamp (newest first)
-        const sortedPosts = parsedPosts.sort((a: Post, b: Post) => b.timestamp - a.timestamp);
-        setPosts(sortedPosts);
-      }
+      const feedPosts = await PostService.getFeedPosts(user.id);
+      setPosts(feedPosts);
     } catch (error) {
       console.error('Error loading posts:', error);
     }
@@ -141,8 +166,40 @@ const FeedScreen: React.FC = () => {
     setImageViewVisible(true);
   };
 
+  const handleLike = async (postId: string) => {
+    if (!user) return;
+    
+    try {
+      const success = await PostService.likePost(postId, user.id);
+      if (success) {
+        await loadPosts(); // Refresh posts to show updated likes
+      }
+    } catch (error) {
+      console.error('Error liking post:', error);
+    }
+  };
+
+  const handleUnlike = async (postId: string) => {
+    if (!user) return;
+    
+    try {
+      const success = await PostService.unlikePost(postId, user.id);
+      if (success) {
+        await loadPosts(); // Refresh posts to show updated likes
+      }
+    } catch (error) {
+      console.error('Error unliking post:', error);
+    }
+  };
+
   const renderFeedItem = ({ item }: { item: Post }) => (
-    <FeedItem post={item} onImagePress={handleImagePress} />
+    <FeedItem 
+      post={item} 
+      onImagePress={handleImagePress}
+      currentUserId={user?.id || ''}
+      onLike={handleLike}
+      onUnlike={handleUnlike}
+    />
   );
 
   const renderEmptyState = () => (
@@ -295,11 +352,32 @@ const styles = StyleSheet.create({
     paddingBottom: 15,
   },
   actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginRight: 20,
     padding: 5,
   },
   actionText: {
     fontSize: 20,
+  },
+  actionCount: {
+    fontSize: 12,
+    color: '#fff',
+    marginLeft: 5,
+  },
+  timestampContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  lateIndicator: {
+    color: '#ff6b6b',
+    fontSize: 11,
+    marginLeft: 5,
+  },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
   },
   emptyState: {
     flex: 1,

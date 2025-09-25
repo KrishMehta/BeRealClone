@@ -9,90 +9,49 @@ import {
   Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
-interface UserProfile {
-  username: string;
-  bio: string;
-  avatar: string;
-  totalPosts: number;
-  streak: number;
-  friendsCount: number;
-}
+import { useAuth } from '../contexts/AuthContext';
+import * as PostService from '../services/PostService';
+import * as UserStorage from '../services/UserStorage';
 
 const ProfileScreen: React.FC = () => {
-  const [profile, setProfile] = useState<UserProfile>({
-    username: 'Your Name',
-    bio: 'Add a bio to your profile',
-    avatar: '',
-    totalPosts: 0,
-    streak: 0,
-    friendsCount: 0,
-  });
+  const { user, logout } = useAuth();
 
   useEffect(() => {
-    loadProfile();
-    loadStats();
-  }, []);
-
-  const loadProfile = async () => {
-    try {
-      const storedProfile = await AsyncStorage.getItem('userProfile');
-      if (storedProfile) {
-        setProfile(JSON.parse(storedProfile));
-      }
-    } catch (error) {
-      console.error('Error loading profile:', error);
+    if (user) {
+      loadStats();
     }
-  };
+  }, [user]);
 
   const loadStats = async () => {
+    if (!user) return;
+    
     try {
-      const posts = await AsyncStorage.getItem('posts');
-      const friends = await AsyncStorage.getItem('friends');
-      
-      const postCount = posts ? JSON.parse(posts).length : 0;
-      const friendCount = friends ? JSON.parse(friends).length : 0;
-      
-      // Calculate streak (simplified - consecutive days with posts)
-      const streak = await calculateStreak();
-      
-      setProfile(prev => ({
-        ...prev,
-        totalPosts: postCount,
-        streak,
-        friendsCount: friendCount,
-      }));
+      // Update user stats in storage
+      await UserStorage.updateUserStats(user.id);
     } catch (error) {
       console.error('Error loading stats:', error);
     }
   };
 
-  const calculateStreak = async (): Promise<number> => {
-    try {
-      const posts = await AsyncStorage.getItem('posts');
-      if (!posts) return 0;
-      
-      const parsedPosts = JSON.parse(posts);
-      const sortedPosts = parsedPosts.sort((a: any, b: any) => b.timestamp - a.timestamp);
-      
-      let streak = 0;
-      const today = new Date();
-      
-      for (let i = 0; i < sortedPosts.length; i++) {
-        const postDate = new Date(sortedPosts[i].timestamp);
-        const daysDiff = Math.floor((today.getTime() - postDate.getTime()) / (1000 * 60 * 60 * 24));
-        
-        if (daysDiff === i) {
-          streak++;
-        } else {
-          break;
+  const handleLogout = async () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Logout', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await logout();
+            } catch (error) {
+              Alert.alert('Error', 'Failed to logout');
+            }
+          }
         }
-      }
-      
-      return streak;
-    } catch (error) {
-      return 0;
-    }
+      ]
+    );
   };
 
   const editProfile = () => {
@@ -106,19 +65,27 @@ const ProfileScreen: React.FC = () => {
   const renderStats = () => (
     <View style={styles.statsContainer}>
       <View style={styles.statItem}>
-        <Text style={styles.statNumber}>{profile.totalPosts}</Text>
+        <Text style={styles.statNumber}>{user?.postsCount || 0}</Text>
         <Text style={styles.statLabel}>Posts</Text>
       </View>
       <View style={styles.statItem}>
-        <Text style={styles.statNumber}>{profile.streak}</Text>
+        <Text style={styles.statNumber}>{user?.streak || 0}</Text>
         <Text style={styles.statLabel}>Streak</Text>
       </View>
       <View style={styles.statItem}>
-        <Text style={styles.statNumber}>{profile.friendsCount}</Text>
+        <Text style={styles.statNumber}>{user?.friendsCount || 0}</Text>
         <Text style={styles.statLabel}>Friends</Text>
       </View>
     </View>
   );
+
+  if (!user) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <Text style={styles.errorText}>User not found</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -131,19 +98,19 @@ const ProfileScreen: React.FC = () => {
       
       <View style={styles.profileSection}>
         <View style={styles.avatarContainer}>
-          {profile.avatar ? (
-            <Image source={{ uri: profile.avatar }} style={styles.avatar} />
+          {user.avatar ? (
+            <Image source={{ uri: user.avatar }} style={styles.avatar} />
           ) : (
             <View style={styles.avatarPlaceholder}>
               <Text style={styles.avatarText}>
-                {profile.username[0].toUpperCase()}
+                {user.displayName[0].toUpperCase()}
               </Text>
             </View>
           )}
         </View>
         
-        <Text style={styles.username}>{profile.username}</Text>
-        <Text style={styles.bio}>{profile.bio}</Text>
+        <Text style={styles.username}>{user.displayName}</Text>
+        <Text style={styles.bio}>{user.bio || 'Add a bio to your profile'}</Text>
         
         {renderStats()}
       </View>
@@ -160,6 +127,10 @@ const ProfileScreen: React.FC = () => {
         </TouchableOpacity>
         <TouchableOpacity style={styles.settingItem}>
           <Text style={styles.settingText}>Account</Text>
+          <Text style={styles.settingArrow}>›</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.settingItem} onPress={handleLogout}>
+          <Text style={[styles.settingText, styles.logoutText]}>Logout</Text>
           <Text style={styles.settingArrow}>›</Text>
         </TouchableOpacity>
       </View>
@@ -294,6 +265,13 @@ const styles = StyleSheet.create({
   settingArrow: {
     color: '#888',
     fontSize: 20,
+  },
+  errorText: {
+    color: '#fff',
+    fontSize: 16,
+  },
+  logoutText: {
+    color: '#ff6b6b',
   },
 });
 

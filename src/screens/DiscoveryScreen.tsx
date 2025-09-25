@@ -7,190 +7,299 @@ import {
   FlatList,
   Image,
   Alert,
+  TextInput,
+  ScrollView,
+  RefreshControl,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-interface DiscoveryUser {
-  id: string;
-  username: string;
-  avatar?: string;
-  mutualFriends: number;
-  isNearby: boolean;
-  distance?: number;
-  lastActive: string;
-}
+import { useAuth } from '../contexts/AuthContext';
+import { User } from '../types/User';
+import { Post } from '../types/Post';
+import * as UserStorage from '../services/UserStorage';
+import * as FriendService from '../services/FriendService';
+import * as PostService from '../services/PostService';
 
 const DiscoveryScreen: React.FC = () => {
-  const [discoveryUsers, setDiscoveryUsers] = useState<DiscoveryUser[]>([]);
-  const [filter, setFilter] = useState<'all' | 'nearby' | 'mutual'>('all');
+  const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<'users' | 'posts'>('users');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [suggestedUsers, setSuggestedUsers] = useState<User[]>([]);
+  const [searchResults, setSearchResults] = useState<User[]>([]);
+  const [discoveryPosts, setDiscoveryPosts] = useState<Post[]>([]);
+  const [friendStatuses, setFriendStatuses] = useState<Record<string, string>>({});
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    loadDiscoveryUsers();
-  }, []);
+    if (user) {
+      loadData();
+    }
+  }, [user, activeTab]);
 
-  const loadDiscoveryUsers = async () => {
+  const loadData = async () => {
+    if (!user) return;
+
     try {
-      const storedUsers = await AsyncStorage.getItem('discoveryUsers');
-      if (storedUsers) {
-        setDiscoveryUsers(JSON.parse(storedUsers));
+      if (activeTab === 'users') {
+        await loadSuggestedUsers();
+        if (searchQuery.trim()) {
+          await handleSearch();
+        }
       } else {
-        // Add some sample discovery users for demo
-        const sampleUsers: DiscoveryUser[] = [
-          {
-            id: '1',
-            username: 'Jessica Martinez',
-            mutualFriends: 3,
-            isNearby: true,
-            distance: 0.5,
-            lastActive: '2h ago',
-          },
-          {
-            id: '2',
-            username: 'David Kim',
-            mutualFriends: 7,
-            isNearby: false,
-            lastActive: '1d ago',
-          },
-          {
-            id: '3',
-            username: 'Lisa Thompson',
-            mutualFriends: 1,
-            isNearby: true,
-            distance: 1.2,
-            lastActive: '30m ago',
-          },
-          {
-            id: '4',
-            username: 'Ryan O\'Connor',
-            mutualFriends: 5,
-            isNearby: true,
-            distance: 0.8,
-            lastActive: '1h ago',
-          },
-          {
-            id: '5',
-            username: 'Maya Patel',
-            mutualFriends: 2,
-            isNearby: false,
-            lastActive: '3h ago',
-          },
-        ];
-        setDiscoveryUsers(sampleUsers);
-        await AsyncStorage.setItem('discoveryUsers', JSON.stringify(sampleUsers));
+        await loadDiscoveryPosts();
       }
     } catch (error) {
-      console.error('Error loading discovery users:', error);
+      console.error('Error loading discovery data:', error);
     }
   };
 
-  const getFilteredUsers = () => {
-    switch (filter) {
-      case 'nearby':
-        return discoveryUsers.filter(user => user.isNearby);
-      case 'mutual':
-        return discoveryUsers.filter(user => user.mutualFriends > 0);
-      default:
-        return discoveryUsers;
+  const loadSuggestedUsers = async () => {
+    if (!user) return;
+
+    try {
+      const suggestions = await FriendService.getFriendSuggestions(user.id, 20);
+      setSuggestedUsers(suggestions);
+      
+      // Load friendship statuses
+      const statuses: Record<string, string> = {};
+      for (const suggestedUser of suggestions) {
+        const status = await FriendService.getFriendshipStatus(user.id, suggestedUser.id);
+        statuses[suggestedUser.id] = status;
+      }
+      setFriendStatuses(statuses);
+    } catch (error) {
+      console.error('Error loading suggested users:', error);
     }
   };
 
-  const sendFriendRequest = (userId: string) => {
-    Alert.alert(
-      'Send Friend Request',
-      'Friend request sent! They\'ll be notified.',
-      [{ text: 'OK' }]
+  const loadDiscoveryPosts = async () => {
+    if (!user) return;
+
+    try {
+      const posts = await PostService.getDiscoveryPosts(user.id);
+      setDiscoveryPosts(posts);
+    } catch (error) {
+      console.error('Error loading discovery posts:', error);
+    }
+  };
+
+  const handleSearch = async () => {
+    if (!user || !searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    try {
+      const results = await UserStorage.searchUsers(searchQuery.trim(), user.id);
+      setSearchResults(results);
+      
+      // Load friendship statuses for search results
+      const statuses: Record<string, string> = {};
+      for (const searchUser of results) {
+        const status = await FriendService.getFriendshipStatus(user.id, searchUser.id);
+        statuses[searchUser.id] = status;
+      }
+      setFriendStatuses(prev => ({ ...prev, ...statuses }));
+    } catch (error) {
+      console.error('Error searching users:', error);
+    }
+  };
+
+  const handleFriendRequest = async (targetUserId: string) => {
+    if (!user) return;
+
+    try {
+      const success = await FriendService.sendFriendRequest(user.id, targetUserId);
+      if (success) {
+        setFriendStatuses(prev => ({ ...prev, [targetUserId]: 'pending_sent' }));
+        Alert.alert('Success', 'Friend request sent!');
+      } else {
+        Alert.alert('Error', 'Failed to send friend request');
+      }
+    } catch (error) {
+      console.error('Error sending friend request:', error);
+      Alert.alert('Error', 'Failed to send friend request');
+    }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadData();
+    setRefreshing(false);
+  };
+
+  const renderUserItem = ({ item }: { item: User }) => {
+    const status = friendStatuses[item.id] || 'none';
+    
+    const renderActionButton = () => {
+      switch (status) {
+        case 'friends':
+          return (
+            <View style={[styles.addButton, styles.friendsButton]}>
+              <Text style={[styles.addButtonText, styles.friendsButtonText]}>Friends</Text>
+            </View>
+          );
+        case 'pending_sent':
+          return (
+            <View style={[styles.addButton, styles.pendingButton]}>
+              <Text style={[styles.addButtonText, styles.pendingButtonText]}>Sent</Text>
+            </View>
+          );
+        case 'pending_received':
+          return (
+            <TouchableOpacity 
+              style={[styles.addButton, styles.acceptButton]}
+              onPress={() => {
+                // Handle accept friend request - would need to implement this
+                Alert.alert('Accept Friend Request', 'This feature would accept the friend request');
+              }}
+            >
+              <Text style={styles.addButtonText}>Accept</Text>
+            </TouchableOpacity>
+          );
+        default:
+          return (
+            <TouchableOpacity 
+              style={styles.addButton}
+              onPress={() => handleFriendRequest(item.id)}
+            >
+              <Text style={styles.addButtonText}>Add</Text>
+            </TouchableOpacity>
+          );
+      }
+    };
+
+    return (
+      <View style={styles.userItem}>
+        <View style={styles.userInfo}>
+          <View style={styles.avatarContainer}>
+            {item.avatar ? (
+              <Image source={{ uri: item.avatar }} style={styles.avatarImage} />
+            ) : (
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>
+                  {item.displayName[0].toUpperCase()}
+                </Text>
+              </View>
+            )}
+          </View>
+          
+          <View style={styles.userDetails}>
+            <Text style={styles.username}>{item.displayName}</Text>
+            <Text style={styles.usernameHandle}>@{item.username}</Text>
+            {item.bio && (
+              <Text style={styles.userBio} numberOfLines={1}>{item.bio}</Text>
+            )}
+            <Text style={styles.lastActive}>
+              {item.friendsCount} friends
+            </Text>
+          </View>
+        </View>
+        
+        {renderActionButton()}
+      </View>
     );
   };
 
-  const renderUserItem = ({ item }: { item: DiscoveryUser }) => (
-    <View style={styles.userItem}>
-      <View style={styles.userInfo}>
-        <View style={styles.avatarContainer}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {item.username[0].toUpperCase()}
-            </Text>
-          </View>
-          {item.isNearby && <View style={styles.nearbyIndicator} />}
-        </View>
-        
-        <View style={styles.userDetails}>
-          <Text style={styles.username}>{item.username}</Text>
-          <Text style={styles.mutualFriends}>
-            {item.mutualFriends} mutual friends
+  const renderEmptyState = () => {
+    if (activeTab === 'users') {
+      return (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyStateTitle}>
+            {searchQuery ? 'No users found' : 'No new people to discover'}
           </Text>
-          {item.isNearby && item.distance && (
-            <Text style={styles.distance}>
-              {item.distance}km away
-            </Text>
-          )}
-          <Text style={styles.lastActive}>
-            Last active {item.lastActive}
+          <Text style={styles.emptyStateSubtitle}>
+            {searchQuery ? 'Try searching for something else' : 'Check back later for more suggestions!'}
           </Text>
         </View>
-      </View>
-      
-      <TouchableOpacity 
-        style={styles.addButton}
-        onPress={() => sendFriendRequest(item.id)}
-      >
-        <Text style={styles.addButtonText}>Add</Text>
-      </TouchableOpacity>
-    </View>
-  );
+      );
+    } else {
+      return (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyStateTitle}>No posts to discover</Text>
+          <Text style={styles.emptyStateSubtitle}>
+            Posts from users you're not friends with will appear here
+          </Text>
+        </View>
+      );
+    }
+  };
 
-  const renderEmptyState = () => (
-    <View style={styles.emptyState}>
-      <Text style={styles.emptyStateTitle}>No new people to discover</Text>
-      <Text style={styles.emptyStateSubtitle}>
-        Check back later for more suggestions!
-      </Text>
-    </View>
-  );
+  const getCurrentData = () => {
+    if (activeTab === 'posts') {
+      return discoveryPosts;
+    }
+    return searchQuery.trim() ? searchResults : suggestedUsers;
+  };
+
+  if (!user) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <Text style={styles.emptyStateTitle}>Please log in to discover</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Discovery</Text>
-        <TouchableOpacity style={styles.refreshButton}>
+        <TouchableOpacity style={styles.refreshButton} onPress={onRefresh}>
           <Text style={styles.refreshButtonText}>⟳</Text>
         </TouchableOpacity>
       </View>
       
-      <View style={styles.filterContainer}>
+      <View style={styles.tabContainer}>
         <TouchableOpacity 
-          style={[styles.filterButton, filter === 'all' && styles.activeFilter]}
-          onPress={() => setFilter('all')}
+          style={[styles.tabButton, activeTab === 'users' && styles.activeTab]}
+          onPress={() => setActiveTab('users')}
         >
-          <Text style={[styles.filterText, filter === 'all' && styles.activeFilterText]}>
-            All
+          <Text style={[styles.tabText, activeTab === 'users' && styles.activeTabText]}>
+            Users
           </Text>
         </TouchableOpacity>
         <TouchableOpacity 
-          style={[styles.filterButton, filter === 'nearby' && styles.activeFilter]}
-          onPress={() => setFilter('nearby')}
+          style={[styles.tabButton, activeTab === 'posts' && styles.activeTab]}
+          onPress={() => setActiveTab('posts')}
         >
-          <Text style={[styles.filterText, filter === 'nearby' && styles.activeFilterText]}>
-            Nearby
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.filterButton, filter === 'mutual' && styles.activeFilter]}
-          onPress={() => setFilter('mutual')}
-        >
-          <Text style={[styles.filterText, filter === 'mutual' && styles.activeFilterText]}>
-            Mutual
+          <Text style={[styles.tabText, activeTab === 'posts' && styles.activeTabText]}>
+            Posts
           </Text>
         </TouchableOpacity>
       </View>
+
+      {activeTab === 'users' && (
+        <View style={styles.searchContainer}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search for users..."
+            placeholderTextColor="#666"
+            value={searchQuery}
+            onChangeText={(text) => {
+              setSearchQuery(text);
+              if (text.trim()) {
+                const timeoutId = setTimeout(() => handleSearch(), 500);
+                return () => clearTimeout(timeoutId);
+              } else {
+                setSearchResults([]);
+              }
+            }}
+          />
+        </View>
+      )}
       
       <FlatList
-        data={getFilteredUsers()}
+        data={getCurrentData()}
         renderItem={renderUserItem}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.usersList}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={renderEmptyState}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#fff"
+          />
+        }
       />
     </View>
   );
@@ -221,28 +330,43 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 20,
   },
-  filterContainer: {
+  tabContainer: {
     flexDirection: 'row',
     paddingHorizontal: 20,
     marginBottom: 20,
   },
-  filterButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+  tabButton: {
+    flex: 1,
+    paddingVertical: 12,
     borderRadius: 20,
     marginRight: 10,
     backgroundColor: '#1a1a1a',
+    alignItems: 'center',
   },
-  activeFilter: {
+  activeTab: {
     backgroundColor: '#4CAF50',
   },
-  filterText: {
+  tabText: {
     color: '#888',
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: 'bold',
   },
-  activeFilterText: {
+  activeTabText: {
     color: '#fff',
+  },
+  searchContainer: {
+    paddingHorizontal: 20,
+    marginBottom: 20,
+  },
+  searchInput: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#fff',
+    borderWidth: 1,
+    borderColor: '#333',
   },
   usersList: {
     paddingHorizontal: 20,
@@ -278,16 +402,10 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
   },
-  nearbyIndicator: {
-    position: 'absolute',
-    bottom: 2,
-    right: 2,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#ff6b6b',
-    borderWidth: 2,
-    borderColor: '#000',
+  avatarImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
   },
   userDetails: {
     flex: 1,
@@ -298,15 +416,15 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 2,
   },
-  mutualFriends: {
+  usernameHandle: {
     color: '#888',
-    fontSize: 12,
-    marginBottom: 2,
+    fontSize: 14,
+    marginBottom: 4,
   },
-  distance: {
-    color: '#ff6b6b',
-    fontSize: 12,
-    marginBottom: 2,
+  userBio: {
+    color: '#ccc',
+    fontSize: 13,
+    marginBottom: 4,
   },
   lastActive: {
     color: '#666',
@@ -322,6 +440,21 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: 'bold',
+  },
+  friendsButton: {
+    backgroundColor: '#666',
+  },
+  friendsButtonText: {
+    color: '#fff',
+  },
+  pendingButton: {
+    backgroundColor: '#ff9800',
+  },
+  pendingButtonText: {
+    color: '#fff',
+  },
+  acceptButton: {
+    backgroundColor: '#2196F3',
   },
   emptyState: {
     flex: 1,

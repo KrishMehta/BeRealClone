@@ -8,7 +8,16 @@ The app now supports complete multi-user functionality with authentication, frie
 
 ## 🚀 How to Run on Your iPhone
 
-### Quick Start:
+### ⚡ ONE-CLICK START (Recommended):
+```bash
+# macOS/Linux
+./run.sh
+
+# Windows
+launch.bat
+```
+
+### Manual Start:
 ```bash
 cd /Users/krish/BeRealClone
 npx expo start

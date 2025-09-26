@@ -7,25 +7,50 @@ import {
   FlatList,
   TextInput,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '../contexts/AuthContext';
+import ApiService from '../services/api';
 
 interface Friend {
-  id: string;
+  _id: string;
   username: string;
   avatar?: string;
   isOnline: boolean;
   lastSeen: string;
-  mutualFriends: number;
+  stats: {
+    friendsCount: number;
+  };
+}
+
+interface FriendRequest {
+  _id: string;
+  requester: {
+    _id: string;
+    username: string;
+    avatar?: string;
+  };
+  recipient: {
+    _id: string;
+    username: string;
+    avatar?: string;
+  };
+  status: string;
+  createdAt: string;
 }
 
 const FriendsScreen: React.FC = () => {
+  const { user } = useAuth();
   const [friends, setFriends] = useState<Friend[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<FriendRequest[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredFriends, setFilteredFriends] = useState<Friend[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'friends' | 'requests'>('friends');
 
   useEffect(() => {
     loadFriends();
+    loadPendingRequests();
   }, []);
 
   useEffect(() => {
@@ -34,46 +59,23 @@ const FriendsScreen: React.FC = () => {
 
   const loadFriends = async () => {
     try {
-      const storedFriends = await AsyncStorage.getItem('friends');
-      if (storedFriends) {
-        setFriends(JSON.parse(storedFriends));
-      } else {
-        // Add some sample friends for demo
-        const sampleFriends: Friend[] = [
-          {
-            id: '1',
-            username: 'Alex Johnson',
-            isOnline: true,
-            lastSeen: 'now',
-            mutualFriends: 5,
-          },
-          {
-            id: '2',
-            username: 'Sarah Wilson',
-            isOnline: false,
-            lastSeen: '2h ago',
-            mutualFriends: 3,
-          },
-          {
-            id: '3',
-            username: 'Mike Chen',
-            isOnline: true,
-            lastSeen: 'now',
-            mutualFriends: 8,
-          },
-          {
-            id: '4',
-            username: 'Emma Davis',
-            isOnline: false,
-            lastSeen: '1d ago',
-            mutualFriends: 2,
-          },
-        ];
-        setFriends(sampleFriends);
-        await AsyncStorage.setItem('friends', JSON.stringify(sampleFriends));
-      }
+      setLoading(true);
+      const response = await ApiService.getFriends();
+      setFriends(response.friends);
     } catch (error) {
       console.error('Error loading friends:', error);
+      Alert.alert('Error', 'Failed to load friends');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadPendingRequests = async () => {
+    try {
+      const response = await ApiService.getPendingRequests();
+      setPendingRequests(response.pendingRequests);
+    } catch (error) {
+      console.error('Error loading pending requests:', error);
     }
   };
 
@@ -89,16 +91,33 @@ const FriendsScreen: React.FC = () => {
   };
 
   const addFriend = () => {
-    Alert.alert(
+    Alert.prompt(
       'Add Friend',
-      'Enter username or phone number to add a friend',
+      'Enter username to send a friend request',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Add', onPress: () => {
-          // In a real app, this would open a search/add friend interface
-          Alert.alert('Coming Soon', 'Friend search feature coming soon!');
-        }}
-      ]
+        { 
+          text: 'Send Request', 
+          onPress: async (username) => {
+            if (username && username.trim()) {
+              try {
+                // First search for the user
+                const searchResponse = await ApiService.searchUsers(username.trim());
+                if (searchResponse.users.length > 0) {
+                  const userToAdd = searchResponse.users[0];
+                  await ApiService.sendFriendRequest(userToAdd._id);
+                  Alert.alert('Success', `Friend request sent to ${userToAdd.username}`);
+                } else {
+                  Alert.alert('Error', 'User not found');
+                }
+              } catch (error: any) {
+                Alert.alert('Error', error.message || 'Failed to send friend request');
+              }
+            }
+          }
+        }
+      ],
+      'plain-text'
     );
   };
 
@@ -112,24 +131,53 @@ const FriendsScreen: React.FC = () => {
           text: 'Remove', 
           style: 'destructive',
           onPress: async () => {
-            const updatedFriends = friends.filter(f => f.id !== friendId);
-            setFriends(updatedFriends);
-            await AsyncStorage.setItem('friends', JSON.stringify(updatedFriends));
+            try {
+              await ApiService.removeFriend(friendId);
+              setFriends(friends.filter(f => f._id !== friendId));
+              Alert.alert('Success', 'Friend removed successfully');
+            } catch (error: any) {
+              Alert.alert('Error', error.message || 'Failed to remove friend');
+            }
           }
         }
       ]
     );
   };
 
+  const acceptFriendRequest = async (requestId: string) => {
+    try {
+      await ApiService.acceptFriendRequest(requestId);
+      await loadFriends();
+      await loadPendingRequests();
+      Alert.alert('Success', 'Friend request accepted');
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to accept friend request');
+    }
+  };
+
+  const rejectFriendRequest = async (requestId: string) => {
+    try {
+      await ApiService.rejectFriendRequest(requestId);
+      await loadPendingRequests();
+      Alert.alert('Success', 'Friend request rejected');
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to reject friend request');
+    }
+  };
+
   const renderFriendItem = ({ item }: { item: Friend }) => (
     <View style={styles.friendItem}>
       <View style={styles.friendInfo}>
         <View style={styles.avatarContainer}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {item.username[0].toUpperCase()}
-            </Text>
-          </View>
+          {item.avatar ? (
+            <Image source={{ uri: item.avatar }} style={styles.avatar} />
+          ) : (
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>
+                {item.username[0].toUpperCase()}
+              </Text>
+            </View>
+          )}
           {item.isOnline && <View style={styles.onlineIndicator} />}
         </View>
         
@@ -139,17 +187,57 @@ const FriendsScreen: React.FC = () => {
             {item.isOnline ? 'Online' : `Last seen ${item.lastSeen}`}
           </Text>
           <Text style={styles.mutualFriends}>
-            {item.mutualFriends} mutual friends
+            {item.stats.friendsCount} friends
           </Text>
         </View>
       </View>
       
       <TouchableOpacity 
         style={styles.removeButton}
-        onPress={() => removeFriend(item.id)}
+        onPress={() => removeFriend(item._id)}
       >
         <Text style={styles.removeButtonText}>Remove</Text>
       </TouchableOpacity>
+    </View>
+  );
+
+  const renderFriendRequestItem = ({ item }: { item: FriendRequest }) => (
+    <View style={styles.friendItem}>
+      <View style={styles.friendInfo}>
+        <View style={styles.avatarContainer}>
+          {item.requester.avatar ? (
+            <Image source={{ uri: item.requester.avatar }} style={styles.avatar} />
+          ) : (
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>
+                {item.requester.username[0].toUpperCase()}
+              </Text>
+            </View>
+          )}
+        </View>
+        
+        <View style={styles.friendDetails}>
+          <Text style={styles.friendName}>{item.requester.username}</Text>
+          <Text style={styles.lastSeen}>
+            Sent {new Date(item.createdAt).toLocaleDateString()}
+          </Text>
+        </View>
+      </View>
+      
+      <View style={styles.requestButtons}>
+        <TouchableOpacity 
+          style={styles.acceptButton}
+          onPress={() => acceptFriendRequest(item._id)}
+        >
+          <Text style={styles.acceptButtonText}>Accept</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={styles.rejectButton}
+          onPress={() => rejectFriendRequest(item._id)}
+        >
+          <Text style={styles.rejectButtonText}>Reject</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 
@@ -165,6 +253,15 @@ const FriendsScreen: React.FC = () => {
     </View>
   );
 
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#4CAF50" />
+        <Text style={styles.loadingText}>Loading friends...</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -174,24 +271,65 @@ const FriendsScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
       
-      <View style={styles.searchContainer}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search friends..."
-          placeholderTextColor="#888"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
+      <View style={styles.tabContainer}>
+        <TouchableOpacity 
+          style={[styles.tab, activeTab === 'friends' && styles.activeTab]}
+          onPress={() => setActiveTab('friends')}
+        >
+          <Text style={[styles.tabText, activeTab === 'friends' && styles.activeTabText]}>
+            Friends ({friends.length})
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.tab, activeTab === 'requests' && styles.activeTab]}
+          onPress={() => setActiveTab('requests')}
+        >
+          <Text style={[styles.tabText, activeTab === 'requests' && styles.activeTabText]}>
+            Requests ({pendingRequests.length})
+          </Text>
+        </TouchableOpacity>
       </View>
       
-      <FlatList
-        data={filteredFriends}
-        renderItem={renderFriendItem}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.friendsList}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={renderEmptyState}
-      />
+      {activeTab === 'friends' && (
+        <>
+          <View style={styles.searchContainer}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search friends..."
+              placeholderTextColor="#888"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+          </View>
+          
+          <FlatList
+            data={filteredFriends}
+            renderItem={renderFriendItem}
+            keyExtractor={(item) => item._id}
+            contentContainerStyle={styles.friendsList}
+            showsVerticalScrollIndicator={false}
+            ListEmptyComponent={renderEmptyState}
+          />
+        </>
+      )}
+      
+      {activeTab === 'requests' && (
+        <FlatList
+          data={pendingRequests}
+          renderItem={renderFriendRequestItem}
+          keyExtractor={(item) => item._id}
+          contentContainerStyle={styles.friendsList}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={() => (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateTitle}>No pending requests</Text>
+              <Text style={styles.emptyStateSubtitle}>
+                You're all caught up!
+              </Text>
+            </View>
+          )}
+        />
+      )}
     </View>
   );
 };
@@ -341,6 +479,74 @@ const styles = StyleSheet.create({
   addFriendButtonText: {
     color: '#fff',
     fontSize: 16,
+    fontWeight: 'bold',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#000',
+  },
+  loadingText: {
+    color: '#fff',
+    fontSize: 16,
+    marginTop: 10,
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    marginBottom: 20,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    marginHorizontal: 5,
+    backgroundColor: '#1a1a1a',
+    alignItems: 'center',
+  },
+  activeTab: {
+    backgroundColor: '#4CAF50',
+  },
+  tabText: {
+    color: '#888',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  activeTabText: {
+    color: '#fff',
+  },
+  avatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+  },
+  requestButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  acceptButton: {
+    backgroundColor: '#4CAF50',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    marginRight: 8,
+  },
+  acceptButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  rejectButton: {
+    backgroundColor: '#ff4444',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+  },
+  rejectButtonText: {
+    color: '#fff',
+    fontSize: 12,
     fontWeight: 'bold',
   },
 });

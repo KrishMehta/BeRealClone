@@ -7,8 +7,12 @@ import {
   ScrollView,
   Image,
   Alert,
+  TextInput,
+  Modal,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
+import { useAuth } from '../contexts/AuthContext';
+import ApiService from '../services/api';
 
 interface UserProfile {
   username: string;
@@ -20,101 +24,123 @@ interface UserProfile {
 }
 
 const ProfileScreen: React.FC = () => {
-  const [profile, setProfile] = useState<UserProfile>({
-    username: 'Your Name',
-    bio: 'Add a bio to your profile',
-    avatar: '',
-    totalPosts: 0,
-    streak: 0,
-    friendsCount: 0,
-  });
+  const { user, updateUser, logout } = useAuth();
+  const [isEditing, setIsEditing] = useState(false);
+  const [editUsername, setEditUsername] = useState('');
+  const [editBio, setEditBio] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    loadProfile();
-    loadStats();
-  }, []);
+    if (user) {
+      setEditUsername(user.username);
+      setEditBio(user.bio);
+    }
+  }, [user]);
 
-  const loadProfile = async () => {
+  const handleEditProfile = () => {
+    setIsEditing(true);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!editUsername.trim()) {
+      Alert.alert('Error', 'Username cannot be empty');
+      return;
+    }
+
+    setIsLoading(true);
     try {
-      const storedProfile = await AsyncStorage.getItem('userProfile');
-      if (storedProfile) {
-        setProfile(JSON.parse(storedProfile));
+      await ApiService.updateProfile({
+        username: editUsername.trim(),
+        bio: editBio.trim(),
+      });
+
+      if (user) {
+        updateUser({
+          ...user,
+          username: editUsername.trim(),
+          bio: editBio.trim(),
+        });
       }
-    } catch (error) {
-      console.error('Error loading profile:', error);
+
+      setIsEditing(false);
+      Alert.alert('Success', 'Profile updated successfully');
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to update profile');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const loadStats = async () => {
-    try {
-      const posts = await AsyncStorage.getItem('posts');
-      const friends = await AsyncStorage.getItem('friends');
-      
-      const postCount = posts ? JSON.parse(posts).length : 0;
-      const friendCount = friends ? JSON.parse(friends).length : 0;
-      
-      // Calculate streak (simplified - consecutive days with posts)
-      const streak = await calculateStreak();
-      
-      setProfile(prev => ({
-        ...prev,
-        totalPosts: postCount,
-        streak,
-        friendsCount: friendCount,
-      }));
-    } catch (error) {
-      console.error('Error loading stats:', error);
-    }
+  const handleCancelEdit = () => {
+    setEditUsername(user?.username || '');
+    setEditBio(user?.bio || '');
+    setIsEditing(false);
   };
 
-  const calculateStreak = async (): Promise<number> => {
+  const handleAvatarUpload = async () => {
     try {
-      const posts = await AsyncStorage.getItem('posts');
-      if (!posts) return 0;
-      
-      const parsedPosts = JSON.parse(posts);
-      const sortedPosts = parsedPosts.sort((a: any, b: any) => b.timestamp - a.timestamp);
-      
-      let streak = 0;
-      const today = new Date();
-      
-      for (let i = 0; i < sortedPosts.length; i++) {
-        const postDate = new Date(sortedPosts[i].timestamp);
-        const daysDiff = Math.floor((today.getTime() - postDate.getTime()) / (1000 * 60 * 60 * 24));
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        setIsLoading(true);
+        const response = await ApiService.uploadAvatar(result.assets[0].uri);
         
-        if (daysDiff === i) {
-          streak++;
-        } else {
-          break;
+        if (user) {
+          updateUser({
+            ...user,
+            avatar: response.avatar,
+          });
         }
+        
+        Alert.alert('Success', 'Avatar updated successfully');
       }
-      
-      return streak;
-    } catch (error) {
-      return 0;
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to upload avatar');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const editProfile = () => {
+  const handleLogout = () => {
     Alert.alert(
-      'Edit Profile',
-      'Profile editing feature coming soon!',
-      [{ text: 'OK' }]
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Logout', 
+          style: 'destructive',
+          onPress: logout
+        }
+      ]
     );
   };
+
+  if (!user) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>Loading profile...</Text>
+      </View>
+    );
+  }
 
   const renderStats = () => (
     <View style={styles.statsContainer}>
       <View style={styles.statItem}>
-        <Text style={styles.statNumber}>{profile.totalPosts}</Text>
+        <Text style={styles.statNumber}>{user.stats.totalPosts}</Text>
         <Text style={styles.statLabel}>Posts</Text>
       </View>
       <View style={styles.statItem}>
-        <Text style={styles.statNumber}>{profile.streak}</Text>
+        <Text style={styles.statNumber}>{user.stats.streak}</Text>
         <Text style={styles.statLabel}>Streak</Text>
       </View>
       <View style={styles.statItem}>
-        <Text style={styles.statNumber}>{profile.friendsCount}</Text>
+        <Text style={styles.statNumber}>{user.stats.friendsCount}</Text>
         <Text style={styles.statLabel}>Friends</Text>
       </View>
     </View>
@@ -124,26 +150,70 @@ const ProfileScreen: React.FC = () => {
     <ScrollView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Profile</Text>
-        <TouchableOpacity style={styles.editButton} onPress={editProfile}>
+        <TouchableOpacity style={styles.editButton} onPress={handleEditProfile}>
           <Text style={styles.editButtonText}>Edit</Text>
         </TouchableOpacity>
       </View>
       
       <View style={styles.profileSection}>
-        <View style={styles.avatarContainer}>
-          {profile.avatar ? (
-            <Image source={{ uri: profile.avatar }} style={styles.avatar} />
+        <TouchableOpacity style={styles.avatarContainer} onPress={handleAvatarUpload}>
+          {user.avatar ? (
+            <Image source={{ uri: user.avatar }} style={styles.avatar} />
           ) : (
             <View style={styles.avatarPlaceholder}>
               <Text style={styles.avatarText}>
-                {profile.username[0].toUpperCase()}
+                {user.username[0].toUpperCase()}
               </Text>
             </View>
           )}
-        </View>
+          <View style={styles.avatarOverlay}>
+            <Text style={styles.avatarOverlayText}>📷</Text>
+          </View>
+        </TouchableOpacity>
         
-        <Text style={styles.username}>{profile.username}</Text>
-        <Text style={styles.bio}>{profile.bio}</Text>
+        {isEditing ? (
+          <View style={styles.editForm}>
+            <TextInput
+              style={styles.editInput}
+              value={editUsername}
+              onChangeText={setEditUsername}
+              placeholder="Username"
+              placeholderTextColor="#666"
+            />
+            <TextInput
+              style={[styles.editInput, styles.bioInput]}
+              value={editBio}
+              onChangeText={setEditBio}
+              placeholder="Bio"
+              placeholderTextColor="#666"
+              multiline
+              numberOfLines={3}
+            />
+            <View style={styles.editButtons}>
+              <TouchableOpacity 
+                style={styles.cancelButton} 
+                onPress={handleCancelEdit}
+                disabled={isLoading}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.saveButton} 
+                onPress={handleSaveProfile}
+                disabled={isLoading}
+              >
+                <Text style={styles.saveButtonText}>
+                  {isLoading ? 'Saving...' : 'Save'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <>
+            <Text style={styles.username}>{user.username}</Text>
+            <Text style={styles.bio}>{user.bio}</Text>
+          </>
+        )}
         
         {renderStats()}
       </View>
@@ -158,8 +228,8 @@ const ProfileScreen: React.FC = () => {
           <Text style={styles.settingText}>Privacy</Text>
           <Text style={styles.settingArrow}>›</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.settingItem}>
-          <Text style={styles.settingText}>Account</Text>
+        <TouchableOpacity style={styles.settingItem} onPress={handleLogout}>
+          <Text style={[styles.settingText, styles.logoutText]}>Logout</Text>
           <Text style={styles.settingArrow}>›</Text>
         </TouchableOpacity>
       </View>
@@ -294,6 +364,85 @@ const styles = StyleSheet.create({
   settingArrow: {
     color: '#888',
     fontSize: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#000',
+  },
+  loadingText: {
+    color: '#fff',
+    fontSize: 16,
+  },
+  avatarOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#4CAF50',
+    borderRadius: 15,
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarOverlayText: {
+    color: '#fff',
+    fontSize: 16,
+  },
+  editForm: {
+    width: '100%',
+    marginTop: 20,
+  },
+  editInput: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: '#fff',
+    borderWidth: 1,
+    borderColor: '#333',
+    marginBottom: 15,
+  },
+  bioInput: {
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  editButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  cancelButton: {
+    backgroundColor: '#333',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+    flex: 1,
+    marginRight: 10,
+  },
+  cancelButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  saveButton: {
+    backgroundColor: '#4CAF50',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+    flex: 1,
+  },
+  saveButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  logoutText: {
+    color: '#ff4444',
   },
 });
 

@@ -1,16 +1,37 @@
 import React, { useState } from 'react';
-import { View, StatusBar } from 'react-native';
+import { View, StatusBar, ActivityIndicator } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 
 import CameraScreen from './src/screens/CameraScreen';
 import FeedScreen from './src/screens/FeedScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import FriendsScreen from './src/screens/FriendsScreen';
 import DiscoveryScreen from './src/screens/DiscoveryScreen';
+import LoginScreen from './src/screens/LoginScreen';
+import RegisterScreen from './src/screens/RegisterScreen';
 import BottomTabBar from './src/components/BottomTabBar';
 
-const App: React.FC = () => {
+const AppContent: React.FC = () => {
+  const { isAuthenticated, isLoading, user } = useAuth();
   const [activeTab, setActiveTab] = useState('Camera');
+  const [showRegister, setShowRegister] = useState(false);
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }}>
+        <ActivityIndicator size="large" color="#4CAF50" />
+      </View>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return showRegister ? (
+      <RegisterScreen />
+    ) : (
+      <LoginScreen />
+    );
+  }
 
   const renderScreen = () => {
     switch (activeTab) {
@@ -30,12 +51,20 @@ const App: React.FC = () => {
   };
 
   return (
+    <View style={{ flex: 1, backgroundColor: '#000' }}>
+      <StatusBar barStyle="light-content" backgroundColor="#000" />
+      {renderScreen()}
+      <BottomTabBar activeTab={activeTab} onTabPress={setActiveTab} />
+    </View>
+  );
+};
+
+const App: React.FC = () => {
+  return (
     <SafeAreaProvider>
-      <View style={{ flex: 1, backgroundColor: '#000' }}>
-        <StatusBar barStyle="light-content" backgroundColor="#000" />
-        {renderScreen()}
-        <BottomTabBar activeTab={activeTab} onTabPress={setActiveTab} />
-      </View>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
     </SafeAreaProvider>
   );
 };

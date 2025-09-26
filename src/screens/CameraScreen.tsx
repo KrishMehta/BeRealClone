@@ -9,7 +9,9 @@ import {
   Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
+import { useAuth } from '../contexts/AuthContext';
+import ApiService from '../services/api';
 
 const { width, height } = Dimensions.get('window');
 
@@ -22,6 +24,7 @@ interface Post {
 }
 
 const CameraScreen: React.FC = () => {
+  const { user, updateUser } = useAuth();
   const [frontCamera, setFrontCamera] = useState(true);
   const [frontImage, setFrontImage] = useState<string | null>(null);
   const [backImage, setBackImage] = useState<string | null>(null);
@@ -30,11 +33,15 @@ const CameraScreen: React.FC = () => {
   const [timeLeft, setTimeLeft] = useState(0);
   const [cameraPermission, setCameraPermission] = useState<boolean>(false);
   const [mediaLibraryPermission, setMediaLibraryPermission] = useState<boolean>(false);
+  const [locationPermission, setLocationPermission] = useState<boolean>(false);
+  const [currentLocation, setCurrentLocation] = useState<any>(null);
+  const [isPosting, setIsPosting] = useState(false);
 
   useEffect(() => {
     checkPermissions();
     checkDailyPost();
     startCountdown();
+    getCurrentLocation();
   }, []);
 
   const checkPermissions = async () => {
@@ -87,11 +94,38 @@ const CameraScreen: React.FC = () => {
 
   const checkDailyPost = async () => {
     try {
-      const lastPostDate = await AsyncStorage.getItem('lastPostDate');
-      const today = new Date().toDateString();
-      setHasPostedToday(lastPostDate === today);
+      // Check if user has posted today by looking at their recent posts
+      const response = await ApiService.getUserPosts(user?._id || '', 1, 1);
+      if (response.posts && response.posts.length > 0) {
+        const lastPost = response.posts[0];
+        const lastPostDate = new Date(lastPost.postedAt).toDateString();
+        const today = new Date().toDateString();
+        setHasPostedToday(lastPostDate === today);
+      } else {
+        setHasPostedToday(false);
+      }
     } catch (error) {
       console.error('Error checking daily post:', error);
+      setHasPostedToday(false);
+    }
+  };
+
+  const getCurrentLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        setLocationPermission(true);
+        const location = await Location.getCurrentPositionAsync({});
+        setCurrentLocation({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        });
+      } else {
+        setLocationPermission(false);
+      }
+    } catch (error) {
+      console.error('Error getting location:', error);
+      setLocationPermission(false);
     }
   };
 
@@ -199,32 +233,44 @@ const CameraScreen: React.FC = () => {
       return;
     }
 
+    if (isPosting) {
+      return;
+    }
+
+    setIsPosting(true);
+
     try {
-      const post: Post = {
-        id: Date.now().toString(),
+      const postData = {
         frontImage,
         backImage,
-        timestamp: Date.now(),
-        hasPosted: true,
+        caption: '',
+        visibility: 'friends',
+        location: currentLocation,
       };
 
-      // Save post to AsyncStorage
-      const existingPosts = await AsyncStorage.getItem('posts');
-      const posts = existingPosts ? JSON.parse(existingPosts) : [];
-      posts.push(post);
-      await AsyncStorage.setItem('posts', JSON.stringify(posts));
-      
-      // Update last post date
-      await AsyncStorage.setItem('lastPostDate', new Date().toDateString());
+      await ApiService.createPost(postData);
       
       setHasPostedToday(true);
       setFrontImage(null);
       setBackImage(null);
       
+      // Update user's post count
+      if (user) {
+        updateUser({
+          ...user,
+          stats: {
+            ...user.stats,
+            totalPosts: user.stats.totalPosts + 1,
+          },
+        });
+      }
+      
       Alert.alert('Posted!', 'Your BeReal has been posted to the feed');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error posting:', error);
-      Alert.alert('Error', 'Failed to post');
+      Alert.alert('Error', error.message || 'Failed to post');
+    } finally {
+      setIsPosting(false);
     }
   };
 
@@ -243,8 +289,14 @@ const CameraScreen: React.FC = () => {
             <Image source={{ uri: frontImage }} style={styles.previewImage} />
             <Image source={{ uri: backImage }} style={styles.previewImage} />
           </View>
-          <TouchableOpacity style={styles.postButton} onPress={postToFeed}>
-            <Text style={styles.postButtonText}>Post to Feed</Text>
+          <TouchableOpacity 
+            style={[styles.postButton, isPosting && styles.disabledButton]} 
+            onPress={postToFeed}
+            disabled={isPosting}
+          >
+            <Text style={styles.postButtonText}>
+              {isPosting ? 'Posting...' : 'Post to Feed'}
+            </Text>
           </TouchableOpacity>
         </View>
       );

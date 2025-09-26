@@ -10,19 +10,43 @@ import {
   Alert,
   RefreshControl,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '../contexts/AuthContext';
+import ApiService from '../services/api';
 // import ImageView from 'react-native-image-viewing';
 
 const { width, height } = Dimensions.get('window');
 
 interface Post {
-  id: string;
+  _id: string;
   frontImage: string;
   backImage: string;
-  timestamp: number;
-  hasPosted: boolean;
-  username?: string;
-  userAvatar?: string;
+  postedAt: string;
+  caption: string;
+  author: {
+    _id: string;
+    username: string;
+    avatar: string;
+  };
+  likes: Array<{
+    user: {
+      _id: string;
+      username: string;
+      avatar: string;
+    };
+    likedAt: string;
+  }>;
+  comments: Array<{
+    user: {
+      _id: string;
+      username: string;
+      avatar: string;
+    };
+    text: string;
+    createdAt: string;
+  }>;
+  likeCount: number;
+  commentCount: number;
+  shareCount: number;
 }
 
 interface FeedItemProps {
@@ -31,7 +55,17 @@ interface FeedItemProps {
 }
 
 const FeedItem: React.FC<FeedItemProps> = ({ post, onImagePress }) => {
-  const formatTime = (timestamp: number) => {
+  const { user } = useAuth();
+  const [isLiked, setIsLiked] = useState(false);
+  const [likeCount, setLikeCount] = useState(post.likeCount);
+
+  useEffect(() => {
+    // Check if current user has liked this post
+    const userLiked = post.likes.some(like => like.user._id === user?._id);
+    setIsLiked(userLiked);
+  }, [post.likes, user?._id]);
+
+  const formatTime = (timestamp: string) => {
     const date = new Date(timestamp);
     const now = new Date();
     const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
@@ -46,21 +80,49 @@ const FeedItem: React.FC<FeedItemProps> = ({ post, onImagePress }) => {
     }
   };
 
+  const handleLike = async () => {
+    try {
+      if (isLiked) {
+        await ApiService.unlikePost(post._id);
+        setLikeCount(prev => prev - 1);
+      } else {
+        await ApiService.likePost(post._id);
+        setLikeCount(prev => prev + 1);
+      }
+      setIsLiked(!isLiked);
+    } catch (error) {
+      console.error('Error liking post:', error);
+    }
+  };
+
+  const handleShare = async () => {
+    try {
+      await ApiService.sharePost(post._id);
+      Alert.alert('Shared', 'Post shared successfully');
+    } catch (error) {
+      console.error('Error sharing post:', error);
+    }
+  };
+
   return (
     <View style={styles.feedItem}>
       <View style={styles.postHeader}>
         <View style={styles.userInfo}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {post.username ? post.username[0].toUpperCase() : 'U'}
-            </Text>
+            {post.author.avatar ? (
+              <Image source={{ uri: post.author.avatar }} style={styles.avatarImage} />
+            ) : (
+              <Text style={styles.avatarText}>
+                {post.author.username[0].toUpperCase()}
+              </Text>
+            )}
           </View>
           <View>
             <Text style={styles.username}>
-              {post.username || 'You'}
+              {post.author.username}
             </Text>
             <Text style={styles.timestamp}>
-              {formatTime(post.timestamp)}
+              {formatTime(post.postedAt)}
             </Text>
           </View>
         </View>
@@ -92,14 +154,19 @@ const FeedItem: React.FC<FeedItemProps> = ({ post, onImagePress }) => {
       </View>
       
       <View style={styles.postActions}>
-        <TouchableOpacity style={styles.actionButton}>
-          <Text style={styles.actionText}>❤️</Text>
+        <TouchableOpacity style={styles.actionButton} onPress={handleLike}>
+          <Text style={[styles.actionText, isLiked && styles.likedText]}>
+            {isLiked ? '❤️' : '🤍'}
+          </Text>
+          <Text style={styles.actionCount}>{likeCount}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionButton}>
           <Text style={styles.actionText}>💬</Text>
+          <Text style={styles.actionCount}>{post.commentCount}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.actionButton}>
+        <TouchableOpacity style={styles.actionButton} onPress={handleShare}>
           <Text style={styles.actionText}>📤</Text>
+          <Text style={styles.actionCount}>{post.shareCount}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -111,6 +178,7 @@ const FeedScreen: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [imageViewVisible, setImageViewVisible] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadPosts();
@@ -118,15 +186,14 @@ const FeedScreen: React.FC = () => {
 
   const loadPosts = async () => {
     try {
-      const storedPosts = await AsyncStorage.getItem('posts');
-      if (storedPosts) {
-        const parsedPosts = JSON.parse(storedPosts);
-        // Sort by timestamp (newest first)
-        const sortedPosts = parsedPosts.sort((a: Post, b: Post) => b.timestamp - a.timestamp);
-        setPosts(sortedPosts);
-      }
+      setLoading(true);
+      const response = await ApiService.getFeed();
+      setPosts(response.posts);
     } catch (error) {
       console.error('Error loading posts:', error);
+      Alert.alert('Error', 'Failed to load posts');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -144,6 +211,14 @@ const FeedScreen: React.FC = () => {
   const renderFeedItem = ({ item }: { item: Post }) => (
     <FeedItem post={item} onImagePress={handleImagePress} />
   );
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>Loading posts...</Text>
+      </View>
+    );
+  }
 
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
@@ -166,7 +241,7 @@ const FeedScreen: React.FC = () => {
       <FlatList
         data={posts}
         renderItem={renderFeedItem}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item._id}
         contentContainerStyle={styles.feedList}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -243,6 +318,11 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
   username: {
     color: '#fff',
     fontSize: 16,
@@ -300,6 +380,24 @@ const styles = StyleSheet.create({
   },
   actionText: {
     fontSize: 20,
+  },
+  actionCount: {
+    color: '#888',
+    fontSize: 12,
+    marginLeft: 4,
+  },
+  likedText: {
+    color: '#ff6b6b',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#000',
+  },
+  loadingText: {
+    color: '#fff',
+    fontSize: 16,
   },
   emptyState: {
     flex: 1,

@@ -1,12 +1,12 @@
 @echo off
 setlocal enabledelayedexpansion
 
-REM BeReal Clone - One-Click Setup & Launch Script (Windows)
-REM This script will automatically set up and run the BeReal Clone app
+REM BeReal Clone - One-Click Setup, Test & Launch Script (Windows)
+REM This script will automatically set up, run tests, and launch the BeReal Clone app
 
 echo.
-echo 🎬 BeReal Clone - Automated Setup ^& Launch
-echo ==========================================
+echo 🎬 BeReal Clone - Automated Setup, Test ^& Launch
+echo ================================================
 echo.
 
 REM Check if Node.js is installed
@@ -63,6 +63,22 @@ if not exist "node_modules" (
     echo [SUCCESS] Dependencies already installed
 )
 
+REM Run the test suite
+echo [INFO] Running automated test suite...
+echo [INFO] This will run all tests to ensure the app is working correctly
+echo.
+
+REM Run tests with npm test command
+call npm test -- --passWithNoTests --watchAll=false
+if !errorlevel! neq 0 (
+    echo [ERROR] Tests failed! Please fix the failing tests before proceeding.
+    echo [INFO] You can run 'npm test' manually to see detailed test output
+    pause
+    exit /b 1
+)
+echo [SUCCESS] All tests passed successfully!
+echo.
+
 REM Check if Expo CLI is available
 echo [INFO] Checking Expo CLI...
 where expo >nul 2>&1
@@ -82,7 +98,15 @@ if %errorlevel% neq 0 (
 
 REM Clear Expo cache (optional, helps with issues)
 echo [INFO] Clearing Expo cache for fresh start...
-%EXPO_CMD% start --clear >nul 2>&1 || echo Cache cleared
+REM Clear watchman watches (if available)
+where watchman >nul 2>&1
+if !errorlevel! equ 0 (
+    watchman watch-del-all >nul 2>&1
+)
+REM Remove Metro bundler cache
+if exist "%TEMP%\metro-cache" rmdir /s /q "%TEMP%\metro-cache" >nul 2>&1
+REM Remove Haste map cache
+for /d %%i in ("%TEMP%\haste-map-*") do rmdir /s /q "%%i" >nul 2>&1
 
 echo [SUCCESS] Setup completed successfully!
 echo.

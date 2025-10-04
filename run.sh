@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# BeReal Clone - One-Click Setup & Launch Script
-# This script will automatically set up and run the BeReal Clone app
+# BeReal Clone - One-Click Setup, Test & Launch Script
+# This script will automatically set up, run tests, and launch the BeReal Clone app
 
 set -e  # Exit on any error
 
-echo "🎬 BeReal Clone - Automated Setup & Launch"
-echo "=========================================="
+echo "🎬 BeReal Clone - Automated Setup, Test & Launch"
+echo "================================================"
 
 # Colors for output
 RED='\033[0;31m'
@@ -82,6 +82,21 @@ else
     print_success "Dependencies already installed and up to date"
 fi
 
+# Run the test suite
+print_status "Running automated test suite..."
+print_status "This will run all tests to ensure the app is working correctly"
+echo ""
+
+# Run tests with npm test command
+if npm test -- --passWithNoTests --watchAll=false; then
+    print_success "All tests passed successfully!"
+    echo ""
+else
+    print_error "Tests failed! Please fix the failing tests before proceeding."
+    print_status "You can run 'npm test' manually to see detailed test output"
+    exit 1
+fi
+
 # Check if Expo CLI is available
 print_status "Checking Expo CLI..."
 if ! command -v expo &> /dev/null; then
@@ -98,7 +113,14 @@ fi
 
 # Clear Expo cache (optional, helps with issues)
 print_status "Clearing Expo cache for fresh start..."
-$EXPO_CMD start --clear > /dev/null 2>&1 || true
+# Clear watchman watches
+if command -v watchman &> /dev/null; then
+    watchman watch-del-all > /dev/null 2>&1 || true
+fi
+# Remove Metro bundler cache
+rm -rf "$TMPDIR/metro-cache" > /dev/null 2>&1 || true
+# Remove Haste map cache  
+find "$TMPDIR" -name "haste-map-*" -type d -exec rm -rf {} + > /dev/null 2>&1 || true
 
 print_success "Setup completed successfully!"
 echo ""

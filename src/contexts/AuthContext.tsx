@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { User, AuthSession } from '../types/User';
 import * as AuthService from '../services/AuthService';
 
-interface AuthContextType {
+export interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
@@ -159,3 +159,5 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
+
+export { AuthContext };
